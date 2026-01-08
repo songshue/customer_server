@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 导入共享类型
-from .shared_types import IntentType, AgentResponse
+from app.models import IntentType, AgentResponse
 
 # 重新导出重构后的模块
 try:

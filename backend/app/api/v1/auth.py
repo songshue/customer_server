@@ -1,6 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
 from datetime import timedelta
 from typing import Optional
 import time
@@ -20,26 +19,7 @@ from app.core.security import (
 from app.managers.logger_manager import logger_manager
 from app.managers.prometheus_manager import prometheus_metrics
 
-class UserLogin(BaseModel):
-    """用户登录模型"""
-    username: str
-    password: Optional[str] = None
-
-class UserToken(BaseModel):
-    """用户令牌模型"""
-    access_token: str
-    username: str
-    token_type: str = "bearer"
-    expires_in: int
-    refresh_token: Optional[str] = None
-
-class RefreshTokenRequest(BaseModel):
-    """刷新令牌请求模型"""
-    refresh_token: str
-
-class LogoutRequest(BaseModel):
-    """登出请求模型"""
-    refresh_token: Optional[str] = None
+from app.models import UserLogin, UserToken, RefreshTokenRequest, LogoutRequest
 
 @router.post("/login", response_model=UserToken)
 async def login(user_data: UserLogin):

@@ -21,7 +21,7 @@ from ..tools.logger_tool import LoggerTool
 from ..tools.redis_tool import RedisTool
 
 # 导入共享类型
-from ..shared_types import IntentType, AgentResponse
+from app.models import IntentType, AgentResponse
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -245,31 +245,37 @@ class ProductAgent:
             if not self.llm:
                 return self._generate_simple_response(user_input, product_info)
             
-            # 使用LLM生成详细回答
-            prompt = ChatPromptTemplate.from_template("""
-            你是一个专业的售前客服代表。请根据用户的咨询问题和相关商品信息，提供专业、详细的售前解答。
-
-            用户咨询：{user_input}
+            has_product_info = product_info.get("description") or product_info.get("products")
             
-            商品信息：{product_info}
+            if has_product_info:
+                product_context = json.dumps(product_info, ensure_ascii=False)
+            else:
+                product_context = "未在商品库中找到与您咨询相关的产品信息。请明确告知用户这一点，不要编造任何产品信息。"
+            
+            prompt = ChatPromptTemplate.from_template("""
+你是一个专业的售前客服代表。请根据用户的咨询问题和相关商品信息，提供专业、详细的售前解答。
 
-            请提供：
-            1. 理解用户的咨询需求
-            2. 详细介绍相关产品特点
-            3. 提供购买建议和注意事项
-            4. 回答具体问题
+用户咨询：{user_input}
 
-            回答要求：
-            - 语言友好、专业
-            - 逻辑清晰
-            - 包含具体产品参数
-            - 提供购买指导
-            """)
+商品信息：{product_info}
+
+请严格遵循以下要求：
+1. 如果商品信息为"未在商品库中找到相关内容"，必须明确告知用户
+2. 严格禁止编造、推测或虚构任何不在文档中的产品信息
+3. 如果有相关商品，详细介绍产品特点、参数和购买建议
+4. 回答用户的具体问题
+
+回答要求：
+- 语言友好、专业
+- 逻辑清晰
+- 包含具体产品参数（基于商品信息）
+- 如无商品信息，诚实告知用户并建议提供更多需求信息
+""")
             
             chain = prompt | self.llm
             result = await chain.ainvoke({
                 "user_input": user_input,
-                "product_info": json.dumps(product_info, ensure_ascii=False)
+                "product_info": product_context
             })
             
             return result.content
@@ -282,67 +288,80 @@ class ProductAgent:
         """流式生成商品咨询回答"""
         try:
             if not self.llm:
-                # 如果没有LLM，按字符流式输出简单回答
                 simple_response = self._generate_simple_response(user_input, product_info)
                 for char in simple_response:
                     yield char
-                    # await asyncio.sleep(0.02)  # 控制输出速度
                 return
             
-            # 使用LLM生成流式回答
-            prompt = ChatPromptTemplate.from_template("""
-            你是一个专业的售前客服代表。请根据用户的咨询问题和相关商品信息，提供专业、详细的售前解答。
-
-            用户咨询：{user_input}
+            has_product_info = product_info.get("description") or product_info.get("products")
             
-            商品信息：{product_info}
+            if has_product_info:
+                product_context = json.dumps(product_info, ensure_ascii=False)
+            else:
+                product_context = "未在商品库中找到与您咨询相关的产品信息。请明确告知用户这一点，不要编造任何产品信息。"
+            
+            prompt = ChatPromptTemplate.from_template("""
+你是一个专业的售前客服代表。请根据用户的咨询问题和相关商品信息，提供专业、详细的售前解答。
 
-            请提供：
-            1. 理解用户的咨询需求
-            2. 详细介绍相关产品特点
-            3. 提供购买建议和注意事项
-            4. 回答具体问题
+用户咨询：{user_input}
 
-            回答要求：
-            - 语言友好、专业
-            - 逻辑清晰
-            - 包含具体产品参数
-            - 提供购买指导
-            """)
+商品信息：{product_info}
+
+请严格遵循以下要求：
+1. 如果商品信息为"未在商品库中找到相关内容"，必须明确告知用户
+2. 严格禁止编造、推测或虚构任何不在文档中的产品信息
+3. 如果有相关商品，详细介绍产品特点、参数和购买建议
+4. 回答用户的具体问题
+
+回答要求：
+- 语言友好、专业
+- 逻辑清晰
+- 包含具体产品参数（基于商品信息）
+- 如无商品信息，诚实告知用户并建议提供更多需求信息
+""")
             
             chain = prompt | self.llm
             
-            # 使用流式调用
             async for chunk in chain.astream({
                 "user_input": user_input,
-                "product_info": json.dumps(product_info, ensure_ascii=False)
+                "product_info": product_context
             }):
                 if chunk.content:
                     yield chunk.content
                     
         except Exception as e:
             logger.error(f"流式生成商品回答失败: {e}")
-            # 降级到简单回答
             simple_response = self._generate_simple_response(user_input, product_info)
             for char in simple_response:
                 yield char
-                # await asyncio.sleep(0.02)
 
     def _generate_simple_response(self, user_input: str, product_info: Dict[str, Any]) -> str:
         """生成简单回答"""
         response_parts = []
         
-        response_parts.append("您好！关于您的咨询，我为您整理了相关商品信息：")
+        has_product_info = product_info.get("description") or product_info.get("products")
         
-        if product_info.get("description"):
-            response_parts.append(f"\n{product_info['description']}")
-        
-        response_parts.append("\n如需了解更多具体产品信息，请提供以下信息：")
-        response_parts.append("• 具体产品类别（如手机、电脑等）")
-        response_parts.append("• 价格预算范围")
-        response_parts.append("• 使用需求（如办公、游戏、摄影等）")
-        response_parts.append("• 品牌偏好")
-        
-        response_parts.append("\n我们的专业顾问将为您提供个性化的产品推荐！")
+        if has_product_info:
+            response_parts.append("您好！关于您的咨询，我为您整理了相关商品信息：")
+            
+            if product_info.get("description"):
+                response_parts.append(f"\n{product_info['description']}")
+            
+            response_parts.append("\n如需了解更多具体产品信息，请提供以下信息：")
+            response_parts.append("• 具体产品类别（如手机、电脑等）")
+            response_parts.append("• 价格预算范围")
+            response_parts.append("• 使用需求（如办公、游戏、摄影等）")
+            response_parts.append("• 品牌偏好")
+            
+            response_parts.append("\n我们的专业顾问将为您提供个性化的产品推荐！")
+        else:
+            response_parts.append("您好！感谢您的咨询。")
+            response_parts.append("\n未在商品库中找到与您咨询相关的产品信息。")
+            response_parts.append("\n为了更好地为您提供产品推荐，请提供以下信息：")
+            response_parts.append("• 具体产品类别（如手机、电脑等）")
+            response_parts.append("• 价格预算范围")
+            response_parts.append("• 使用需求（如办公、游戏、摄影等）")
+            response_parts.append("• 品牌偏好")
+            response_parts.append("\n您也可以联系我们的客服热线：400-123-4567 获取专业推荐！")
         
         return "\n".join(response_parts)

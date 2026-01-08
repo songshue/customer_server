@@ -21,7 +21,7 @@ from ..tools.logger_tool import LoggerTool
 from ..tools.redis_tool import RedisTool
 
 # 导入共享类型
-from ..shared_types import IntentType, AgentResponse
+from app.models import IntentType, AgentResponse
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ class AfterSalesAgent:
                         "has_order_info": order_info is not None
                     }
                 )
+     
             
             # 获取售后政策信息
             policy_info = await self._get_after_sales_policy(user_input)
@@ -152,6 +153,7 @@ class AfterSalesAgent:
             
             # 获取售后政策信息
             policy_info = await self._get_after_sales_policy(user_input)
+            print("policy_info121:", policy_info)
             
             # 流式生成回答 - 只返回实际有用的回答内容
             async for chunk in self._stream_generate_response(user_input, order_info, policy_info):
@@ -201,7 +203,7 @@ class AfterSalesAgent:
                     yield char
                     # await asyncio.sleep(0.02)  # 控制输出速度
                 return
-            
+            print("policy_info:", policy_info)
             # 真正的模型流式生成 - 使用astream
             prompt = ChatPromptTemplate.from_template("""
             你是一个专业的售后客服代表。请根据用户的售后问题和相关订单信息、售后政策，提供专业、详细的售后解答。
@@ -213,16 +215,16 @@ class AfterSalesAgent:
             售后政策：{policy_info}
 
             请提供：
-            1. 理解用户的售后需求
-            2. 根据政策提供解决方案
-            3. 详细说明操作流程
-            4. 温馨提示和注意事项
+            1. 根据政策的解决方案
+            2. 操作流程的详细说明
+            3. 温馨提示和注意事项
 
             回答要求：
             - 语言友好、专业
             - 逻辑清晰
             - 提供具体操作指导
             - 包含相关政策条款
+            - 回答内容必须严格依据售后政策：
             """)
             
             chain = prompt | self.llm
@@ -298,17 +300,30 @@ class AfterSalesAgent:
                 return default_policy
             
             # 使用RAG查询相关政策
-            relevant_docs = await self.rag_pipeline.aget_relevant_documents(user_input)
+            rag_result = await self.rag_pipeline.process_message(user_input)
+            print("rag_result:", rag_result)
+            # 从RAG结果中提取政策信息
+            policies = []
+            documents = rag_result.get("documents", [])
+            
+            # 从检索到的文档内容中提取政策信息
+            for doc in documents:
+                content = doc.get("content", "")
+                if content:
+                    policies.append(content)
+            
+            # 如果没有提取到政策，使用默认政策
+            if not policies:
+                policies = [
+                    "7天无理由退货",
+                    "15天质量问题换货",
+                    "1年免费保修",
+                    "终身技术支持"
+                ]
             
             policy_info = {
-                "policies": [doc.page_content for doc in relevant_docs],
-                "sources": [
-                    {
-                        "source": doc.metadata.get("source", "未知"),
-                        "content_preview": doc.page_content[:100] + "..."
-                    }
-                    for doc in relevant_docs
-                ]
+                "policies": policies,  # 从RAG的documents中获取政策
+                "sources": rag_result.get("references", [])  # 使用RAG已经处理好的references
             }
             
             # 缓存政策信息
@@ -326,34 +341,40 @@ class AfterSalesAgent:
             if not self.llm:
                 return self._generate_simple_response(user_input, order_info, policy_info)
             
-            # 使用LLM生成详细回答
+            has_policies = policy_info.get("policies") and len(policy_info["policies"]) > 0
+            
+            if has_policies:
+                policy_context = json.dumps(policy_info, ensure_ascii=False)
+            else:
+                policy_context = "未在知识库中找到与您问题相关的售后政策信息。请明确告知用户这一点，不要编造任何政策信息。"
+            
             prompt = ChatPromptTemplate.from_template("""
-            你是一个专业的售后客服代表。请根据用户的问题和相关信息，提供专业、耐心的售后解答。
+你是一个专业的售后客服代表。请根据用户的问题和相关信息，提供专业、耐心的售后解答。
 
-            用户问题：{user_input}
-            
-            订单信息：{order_info}
-            
-            相关政策：{policy_info}
+用户问题：{user_input}
 
-            请提供：
-            1. 理解用户的问题
-            2. 提供具体的解决方案
-            3. 引用相关政策条款
-            4. 提供后续操作建议
+订单信息：{order_info}
 
-            回答要求：
-            - 语言友好、专业
-            - 逻辑清晰
-            - 包含具体操作步骤
-            - 引用政策依据
-            """)
+相关政策：{policy_info}
+
+请严格遵循以下要求：
+1. 如果政策信息为"未在知识库中找到相关内容"，必须明确告知用户
+2. 严格禁止编造、推测或虚构任何不在文档中的政策信息
+3. 如果有相关政策，引用具体的政策条款
+4. 提供具体的解决方案和后续操作建议
+
+回答要求：
+- 语言友好、专业
+- 逻辑清晰
+- 包含具体操作步骤（基于政策内容）
+- 如无政策信息，诚实告知用户并建议联系人工客服
+""")
             
             chain = prompt | self.llm
             result = await chain.ainvoke({
                 "user_input": user_input,
                 "order_info": json.dumps(order_info, ensure_ascii=False) if order_info else "无订单信息",
-                "policy_info": json.dumps(policy_info, ensure_ascii=False)
+                "policy_info": policy_context
             })
             
             return result.content
@@ -366,18 +387,25 @@ class AfterSalesAgent:
         """生成简单回答"""
         response_parts = []
         
-        response_parts.append("您好！关于您的问题，我为您查询了相关的售后政策：")
+        has_policies = policy_info.get("policies") and len(policy_info["policies"]) > 0
         
-        if policy_info.get("policies"):
+        if has_policies:
+            response_parts.append("您好！关于您的问题，我为您查询了相关的售后政策：")
             response_parts.append("\n我们的售后政策包括：")
-            for policy in policy_info["policies"][:3]:  # 只显示前3条
+            for policy in policy_info["policies"][:3]:
                 response_parts.append(f"• {policy}")
+        else:
+            response_parts.append("您好！感谢您的咨询。")
+            response_parts.append("\n未在知识库中找到与您问题相关的售后政策信息。")
         
         if order_info:
             response_parts.append(f"\n关于订单 {order_info.get('order_id', '')}：")
             response_parts.append(f"订单状态：{order_info.get('status', '未知')}")
             response_parts.append(f"商品名称：{order_info.get('product_name', '未知')}")
         
-        response_parts.append("\n如果您需要进一步帮助，请联系我们的客服热线：400-123-4567")
+        if has_policies:
+            response_parts.append("\n如果您需要进一步帮助，请联系我们的客服热线：400-123-4567")
+        else:
+            response_parts.append("\n为了更好地解答您的问题，建议您联系我们的客服热线：400-123-4567")
         
         return "\n".join(response_parts)

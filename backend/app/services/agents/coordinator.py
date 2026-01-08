@@ -25,7 +25,7 @@ from .after_sales_agent import AfterSalesAgent
 from .product_agent import ProductAgent
 
 # 导入共享类型
-from ..shared_types import IntentType, AgentResponse
+from app.models import IntentType, AgentResponse
 
 # 导入管理器
 try:
@@ -135,6 +135,13 @@ class AgentCoordinator:
                 agent_result = await self.order_agent.query_order(order_id, user_input, session_id)
                 self._update_agent_stats("order_agent", agent_result.success, agent_result.context.get("processing_time", 0))
                 
+            elif intent == IntentType.LOGISTICS:
+                tracking_number = extracted_info.get("tracking_number")
+                order_id = extracted_info.get("order_id")
+                logger.info(f"调用物流查询，订单号: {order_id}, 快递单号: {tracking_number}")
+                agent_result = await self.order_agent.query_logistics(tracking_number, order_id)
+                self._update_agent_stats("order_agent", agent_result.success, agent_result.context.get("processing_time", 0))
+                
             elif intent == IntentType.AFTER_SALES:
                 order_id = extracted_info.get("order_id")
                 order_info = None
@@ -145,7 +152,7 @@ class AgentCoordinator:
                         order_info = order_result.order_info
                 
                 logger.info("调用售后Agent完整回答方法...")
-                agent_result = await self.after_sales_agent.stream_handle_after_sales(user_input, order_info, session_id)
+                agent_result = await self.after_sales_agent.handle_after_sales(user_input, order_info, session_id)
                 self._update_agent_stats("after_sales_agent", agent_result.success, agent_result.context.get("processing_time", 0))
                 
             elif intent == IntentType.PRESALES:

@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-from typing import Dict, Optional,List
+from typing import Dict, Optional, List
 import json
 import uuid
 import logging
@@ -11,7 +10,7 @@ import jwt
 import os
 
 from app.services.chat_service import ChatService
-from app.services.multi_agent_system import get_agent_coordinator, AgentResponse
+from app.services.multi_agent_system import get_agent_coordinator
 from app.utils.rag_pipeline import RAGPipeline
 from app.managers.session_manager import session_manager
 from app.managers.logger_manager import logger_manager
@@ -20,20 +19,35 @@ from app.managers.redis_manager import redis_manager
 from app.managers.prometheus_manager import prometheus_metrics
 from app.core.security import verify_token, is_token_blacklisted
 import asyncio
+import logging as logger
+from app.models import ChatRequest, ChatResponse, SessionCreateRequest, SessionResponse, SessionListResponse, SessionRenameRequest
 
 router = APIRouter()
 security = HTTPBearer()
 
 # 初始化服务
 chat_service = ChatService()
-rag_pipeline = RAGPipeline()
+
+# 初始化RAG管道 - 添加错误处理和日志
+rag_pipeline = None
+try:
+    rag_pipeline = RAGPipeline()
+    rag_status = rag_pipeline.is_available()
+    logger.info(f"RAG管道初始化完成: {rag_status}")
+except Exception as e:
+    logger.error(f"RAG管道初始化失败: {e}", exc_info=True)
+    rag_pipeline = None
 
 # 初始化多Agent系统
 agent_coordinator = None
 def get_multi_agent_coordinator():
     global agent_coordinator
     if agent_coordinator is None:
+        if rag_pipeline is None:
+            logger.error("无法创建Agent协调器：RAG管道未初始化")
+            raise RuntimeError("RAG管道未初始化，无法创建Agent协调器")
         agent_coordinator = get_agent_coordinator(rag_pipeline)
+        logger.info("Agent协调器初始化成功")
     return agent_coordinator
 
 # JWT配置
@@ -460,17 +474,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-class ChatRequest(BaseModel):
-    """聊天请求模型"""
-    message: str
-
-class ChatResponse(BaseModel):
-    """聊天响应模型"""
-    response: str
-    session_id: str
-    timestamp: datetime
-    message_type: str = "chat"
-
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_token)):
     """HTTP聊天接口"""
@@ -504,12 +507,13 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_toke
         # 创建或获取会话ID
         session_id = str(uuid.uuid4())
         
-        # 使用RAG管道生成回复
-        rag_result = await rag_pipeline.process_message(user_message, session_id)
-        ai_response = rag_result["response"]
-        has_knowledge = rag_result.get("has_knowledge", False)
-        references = rag_result.get("references", [])
-        processing_time = rag_result.get("processing_time", 0)
+        # 使用多Agent系统生成回复
+        agent_coordinator = get_multi_agent_coordinator()
+        ai_response = await agent_coordinator.process_message(user_message, session_id)
+        ai_response = ai_response.content if hasattr(ai_response, 'content') else str(ai_response)
+        has_knowledge = True  # 假设agent_coordinator总是能处理
+        references = []  # agent_coordinator可能不提供references
+        processing_time = time.time() - start_time
         
         duration = time.time() - start_time
         
@@ -900,16 +904,13 @@ async def websocket_endpoint(websocket: WebSocket):
                                 prometheus_metrics.record_redis_operation('get_session_messages', True, context_fetch_duration)
                                 prometheus_metrics.record_chat_event('context_fetched', session_id=session_id, user_id=user_id)
                                 
-                                # 使用RAG管道生成回复
+                                # 使用多Agent系统生成回复
                                 ai_response_generation_start = time.time()
-                                rag_result = await rag_pipeline.process_message(
-                                    user_message, 
-                                    session_id, 
-                                    conversation_context=context_messages
-                                )
-                                ai_response = rag_result["response"]
-                                has_knowledge = rag_result.get("has_knowledge", False)
-                                references = rag_result.get("references", [])
+                                agent_coordinator = get_multi_agent_coordinator()
+                                ai_response = await agent_coordinator.process_message(user_message, session_id)
+                                ai_response = ai_response.content if hasattr(ai_response, 'content') else str(ai_response)
+                                has_knowledge = True  # 假设agent_coordinator总是能处理
+                                references = []  # agent_coordinator可能不提供references
                                 ai_response_duration = time.time() - ai_response_generation_start
                                 
                                 # 记录AI回复生成
@@ -1303,25 +1304,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 # 会话管理端点
-class SessionCreateRequest(BaseModel):
-    """创建会话请求模型"""
-    title: Optional[str] = None
-
-class SessionResponse(BaseModel):
-    """会话响应模型"""
-    session_id: str
-    title: Optional[str] = None
-    start_time: datetime
-    end_time: Optional[datetime] = None
-    message_count: int = 0
-    status: str = "active"
-    last_message: Optional[str] = None
-
-class SessionListResponse(BaseModel):
-    """会话列表响应模型"""
-    sessions: List[SessionResponse]
-    total: int
-
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(request: SessionCreateRequest = None, credentials: HTTPAuthorizationCredentials = Depends(security)):
     """创建新会话"""
@@ -1540,10 +1522,6 @@ async def delete_session(session_id: str, credentials: HTTPAuthorizationCredenti
         
         logging.error(f"删除会话失败: {e}")
         raise HTTPException(status_code=500, detail="服务器内部错误")
-
-class SessionRenameRequest(BaseModel):
-    """会话重命名请求模型"""
-    title: str
 
 @router.put("/sessions/{session_id}")
 async def rename_session(session_id: str, request: SessionRenameRequest, credentials: HTTPAuthorizationCredentials = Depends(security)):

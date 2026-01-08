@@ -4,7 +4,7 @@ import ChatInterface from '../components/ChatInterface.vue'
 const routes = [
   {
     path: '/',
-    redirect: '/login'
+    redirect: '/chat'
   },
   {
     path: '/login',
@@ -15,6 +15,11 @@ const routes = [
     path: '/chat',
     name: 'Chat',
     component: ChatInterface
+  },
+  {
+    path: '/knowledge',
+    name: 'Knowledge',
+    component: () => import('../components/KnowledgeBaseManager.vue')
   }
 ]
 

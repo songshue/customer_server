@@ -31,6 +31,9 @@
               <div class="status-dot"></div>
               <span class="status-text">{{ connectionStatusText }}</span>
             </div>
+            <n-button type="info" size="tiny" @click="goToKnowledge" class="knowledge-btn">
+              知识库管理
+            </n-button>
             <n-button type="error" size="tiny" @click="handleLogout" class="logout-btn">
               退出
             </n-button>
@@ -489,6 +492,10 @@ const handleLogout = () => {
   authStore.logout()
 }
 
+const goToKnowledge = () => {
+  router.push('/knowledge')
+}
+
 // 处理新建会话
 const handleNewSession = async () => {
   await sessionsStore.createSession()
@@ -838,6 +845,15 @@ onUnmounted(() => {
   padding: 6px 12px;
   height: 28px;
   line-height: 1;
+}
+
+.knowledge-btn {
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 6px 12px;
+  height: 28px;
+  line-height: 1;
+  margin-right: 8px;
 }
 
 .connection-warning {

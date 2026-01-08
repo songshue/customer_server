@@ -25,9 +25,6 @@ class Settings(BaseModel):
     redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
     redis_password: Optional[str] = os.getenv("REDIS_PASSWORD")
     redis_db: int = int(os.getenv("REDIS_DB", "0"))
-    
-    # ChromaDB配置
-    chroma_db_path: str = os.getenv("CHROMA_DB_PATH", "./chroma_db")
 
 # 创建全局配置实例
 settings = Settings()

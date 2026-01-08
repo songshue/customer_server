@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 class ChatMessage(BaseModel):
@@ -19,13 +19,23 @@ class ChatResponse(BaseModel):
 class UserLogin(BaseModel):
     """用户登录模型"""
     username: str
-    password: str
+    password: Optional[str] = None
 
 class UserToken(BaseModel):
     """用户令牌模型"""
     access_token: str
+    username: str
     token_type: str = "bearer"
     expires_in: int
+    refresh_token: Optional[str] = None
+
+class RefreshTokenRequest(BaseModel):
+    """刷新令牌请求模型"""
+    refresh_token: str
+
+class LogoutRequest(BaseModel):
+    """登出请求模型"""
+    refresh_token: Optional[str] = None
 
 class SessionInfo(BaseModel):
     """会话信息模型"""
@@ -37,9 +47,9 @@ class SessionInfo(BaseModel):
 
 class WebSocketMessage(BaseModel):
     """WebSocket消息模型"""
-    type: str  # message, connect, disconnect, error
+    type: str
     data: Dict[str, Any]
-    timestamp: datetime = None
+    timestamp: Optional[datetime] = None
 
     def __init__(self, **data):
         if 'timestamp' not in data:

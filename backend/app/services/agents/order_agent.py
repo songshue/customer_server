@@ -38,7 +38,7 @@ except ImportError as e:
     logger_manager = None
 
 # 导入共享类型
-from ..shared_types import IntentType, AgentResponse
+from app.models import IntentType, AgentResponse
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -303,6 +303,101 @@ class OrderAgent:
         if order_info.get('customer_phone_masked'):
             response_parts.append(f"• 联系电话：{order_info['customer_phone_masked']}")
         
+        if order_info.get('tracking_number'):
+            response_parts.append(f"\n📦 物流信息：")
+            response_parts.append(f"• 快递单号：{order_info['tracking_number']}")
+        
         response_parts.append(f"\n如需了解更多信息，请告诉我您的具体需求。")
         
         return '\n'.join(response_parts)
+
+    async def query_logistics(self, tracking_number: str = None, order_id: str = None) -> AgentResponse:
+        """
+        查询物流配送状态
+        
+        Args:
+            tracking_number: 快递单号
+            order_id: 订单号（可用于获取关联的快递单号）
+            
+        Returns:
+            AgentResponse: 物流查询结果
+        """
+        start_time = time.time()
+        
+        try:
+            actual_tracking = tracking_number
+            
+            if not actual_tracking and order_id:
+                order_info = await self.db_tool.query_order_by_id(order_id)
+                if order_info:
+                    actual_tracking = order_info.get('tracking_number')
+            
+            if not actual_tracking:
+                return AgentResponse(
+                    success=False,
+                    content="请提供快递单号或关联了物流信息的订单号",
+                    intent=IntentType.ORDER,
+                    context={"query_method": "logistics_query", "error": "no_tracking_number"}
+                )
+            
+            from ..external_api import get_logistics_service
+            logistics_service = get_logistics_service()
+            result = await logistics_service.get_tracking_info(actual_tracking)
+            
+            processing_time = time.time() - start_time
+            
+            if result.get("success"):
+                data = result["data"]
+                content_parts = [
+                    f"📦 物流查询结果",
+                    f"快递单号：{data['tracking_number']}",
+                    f"快递公司：{data['carrier']}",
+                    f"当前状态：{data['status_display']}",
+                    f"发货地：{data['origin']}",
+                    f"收货地：{data['destination']}",
+                    f"预计送达：{data['estimated_delivery']}",
+                    f"\n最新物流轨迹："
+                ]
+                
+                if data.get('events'):
+                    latest_event = data['events'][0]
+                    content_parts.append(f"  • {latest_event['timestamp']} | {latest_event['location']} | {latest_event['description']}")
+                
+                return AgentResponse(
+                    success=True,
+                    content='\n'.join(content_parts),
+                    intent=IntentType.ORDER,
+                    context={
+                        "processing_time": processing_time,
+                        "query_method": "logistics_query",
+                        "tracking_number": actual_tracking,
+                        "logistics_data": result
+                    }
+                )
+            else:
+                return AgentResponse(
+                    success=False,
+                    content=result.get("message", "未找到物流信息"),
+                    intent=IntentType.ORDER,
+                    context={
+                        "processing_time": processing_time,
+                        "query_method": "logistics_query",
+                        "tracking_number": actual_tracking
+                    }
+                )
+                
+        except Exception as e:
+            processing_time = time.time() - start_time
+            error_msg = f"物流查询失败: {e}"
+            logger.error(error_msg)
+            
+            return AgentResponse(
+                success=False,
+                content="抱歉，物流查询服务暂时不可用，请稍后重试。",
+                intent=IntentType.ORDER,
+                context={
+                    "error": str(e),
+                    "processing_time": processing_time,
+                    "query_method": "logistics_query"
+                }
+            )

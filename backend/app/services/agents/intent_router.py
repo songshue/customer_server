@@ -10,6 +10,7 @@ import time
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+import re
 from enum import Enum
 from pydantic import BaseModel
 
@@ -36,7 +37,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 导入共享类型
-from ..shared_types import IntentType, AgentResponse
+from app.models import IntentType, AgentResponse
 
 class IntentRouterAgent:
     """主路由Agent - 判断用户意图"""
@@ -46,19 +47,22 @@ class IntentRouterAgent:
         self.logger_tool = logger_tool
         self.llm = self._init_llm()
         self.intent_prompt = ChatPromptTemplate.from_template("""
-        你是一个智能客服主路由系统。请分析用户输入，判断用户的真实意图。
+                你是一个智能客服主路由系统。请分析用户输入，判断用户的真实意图。
 
         任务：根据用户消息判断意图类型
         输出格式：JSON格式
 
         意图类型定义：
-        - presales: 售前咨询（如产品介绍、价格咨询、规格对比等）
-        - order: 订单相关（如查询订单状态、修改订单、取消订单等）
-        - after_sales: 售后问题（如退货申请、质量问题、维修服务等）
-        - recommendation: 商品推荐（如根据需求推荐产品）
-        - complaint: 投诉建议（如服务质量、体验反馈等）
+        - presales: 售前咨询（未下单前的产品介绍、价格、规格、库存、优惠等问题）
+        - order: 订单相关（查询、修改、取消尚未发货的订单；涉及订单号但未提及收货后问题）
+        - logistics: 物流配送（询问发货时间、快递单号、配送延迟、未收到货等运输中问题）
+        - after_sales: 售后问题（用户已收到商品或确认交易完成，提出以下任一需求：退货、换货、维修、补发、部分退款、质量问题反馈、商品破损/缺失/发错/与描述不符、功能异常、申请售后凭证等。即使语气不满，只要核心诉求是解决商品问题，即归为此类）
+        - recommendation: 商品推荐（明确要求“推荐”“有没有适合...的”等）
+        - complaint: 投诉建议（无具体售后商品处理诉求，仅表达对服务、态度、平台规则的不满，或要求赔偿、曝光、找领导等）
         - greeting: 问候语（如你好、再见、感谢等）
-        - unknown: 无法确定意图
+        - unknown: 无法确定意图（与电商无关、语义模糊、测试语句等）
+
+        判断优先级：after_sales > complaint（当同时涉及商品问题和情绪时，优先 after_sales）
 
         上下文信息：
         {context}
@@ -172,13 +176,56 @@ class IntentRouterAgent:
         """基于规则的意图识别"""
         user_input_lower = user_input.lower()
         
-        # 订单相关关键词
-        order_keywords = ["订单", "购买", "下单", "付款", "发货", "配送", "快递"]
+        # 订单相关关键词（仅操作类）
+        order_keywords = ["订单", "购买", "下单", "付款", "取消订单", "修改订单"]
         if any(keyword in user_input_lower for keyword in order_keywords):
             return AgentResponse(
                 success=True,
                 content="检测到订单相关咨询",
                 intent=IntentType.ORDER,
+                context={"routing_method": "rule_based"}
+            )
+        
+        # 物流相关关键词 - 只有包含具体单号才使用物流查询
+        # 如果只是问一般性问题（如"多久能发货"），会路由到售后Agent查询知识库
+        logistics_with_number = [
+            r"快递单号[：:\s]*[A-Za-z0-9]+",
+            r"单号[：:\s]*[A-Za-z0-9]+",
+            r"运单号[：:\s]*[A-Za-z0-9]+",
+            r"[A-Za-z0-9]{8,}",  # 假设快递单号至少8位
+            r"订单号[：:\s]*[A-Za-z0-9]+",
+        ]
+        has_tracking_number = any(re.search(pattern, user_input) for pattern in logistics_with_number)
+        
+        if has_tracking_number:
+            # 提取订单号/快递单号
+            extracted_info = {}
+            for pattern in logistics_with_number:
+                match = re.search(pattern, user_input)
+                if match:
+                    if "单号" in pattern or "订单号" in pattern:
+                        extracted_info["tracking_number"] = match.group().split("号")[-1].strip("：: \t")
+                    else:
+                        extracted_info["tracking_number"] = match.group()
+                    break
+            
+            return AgentResponse(
+                success=True,
+                content="检测到物流查询（包含单号）",
+                intent=IntentType.LOGISTICS,
+                context={
+                    "routing_method": "rule_based",
+                    "extracted_info": extracted_info
+                }
+            )
+        
+        # 物流相关关键词 - 没有单号则路由到售后Agent查询知识库
+        logistics_keywords = ["发货", "配送", "快递", "物流", "到货", "运输", "发货时间"]
+        if any(keyword in user_input_lower for keyword in logistics_keywords):
+            return AgentResponse(
+                success=True,
+                content="检测到物流配送咨询（将查询知识库）",
+                intent=IntentType.AFTER_SALES,
                 context={"routing_method": "rule_based"}
             )
         
