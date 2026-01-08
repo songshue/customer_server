@@ -4,120 +4,125 @@ services:
   # MySQL数据库服务
   mysql:
     image: mysql:8.0
-    container_name: customer_service_mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: 011216
-      MYSQL_DATABASE: customer
-      MYSQL_USER: root
-      MYSQL_PASSWORD: 011216
+    container_name: mysql
     ports:
       - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=011216
+      - MYSQL_DATABASE=customer
     volumes:
       - mysql_data:/var/lib/mysql
-    command: --default-authentication-plugin=mysql_native_password
-    restart: unless-stopped
+      - ./scripts/database/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
-      - app_network
-
-  # Redis服务（用于会话缓存和JWT黑名单）
+      - app-network
+    restart: always
+  
+  # Redis缓存服务
   redis:
     image: redis:7-alpine
-    container_name: customer_service_redis
+    container_name: redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    restart: unless-stopped
     networks:
-      - app_network
-
+      - app-network
+    restart: always
+  
   # 后端API服务
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: customer_service_backend
+    container_name: backend
+    ports:
+      - "8000:8000"
     environment:
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
       - MYSQL_PASSWORD=011216
       - MYSQL_DATABASE=customer
-      - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=y075F3ZSlvHRoFw_kxsyG_d_WcPPvfTfapHQA4U9E5c
-      - ALGORITHM=HS256
-      - ACCESS_TOKEN_EXPIRE_MINUTES=30
-      - OPENAI_API_KEY=sk-Fb9zehQBrxZUkRbcj1HrRtzgWhwfnN94M4PcQJOhOW0DzDpA
-      - OPENAI_MODEL=gpt-4.1-mini
-      - OPENAI_BASE_URL=https://xiaoai.plus/v1
-      - BAILIAN_API_KEY=sk-0bf23fe773a94da1bd6de64faa66984e
-      - BAILIAN_MODEL=text-embedding-v3
-      - BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/api/v1
-      - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
-      - EMBEDDING_MODEL=bailian/text-embedding-v3
-      - EMBEDDING_PROVIDER=bailian
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - DEBUG=true
-      - ENVIRONMENT=development
-      - LOG_LEVEL=INFO
-      - LOG_FILE=/app/logs/app.log
-      - PROMETHEUS_PORT=9090
-      - FRONTEND_URL=http://localhost:5173
-      - WS_PATH=/ws
-      - LOGISTICS_API_URL=https://api.example.com/logistics
-      - PAYMENT_API_URL=https://api.example.com/payment
-      - KNOWLEDGE_BASE_PATH=/app/knowledge
-      - DOCUMENT_BATCH_SIZE=100
-      - EMBEDDING_BATCH_SIZE=32
-      - AGENT_TIMEOUT=30
-      - MAX_RETRIES=3
-      - CONCURRENT_AGENTS=5
-    ports:
-      - "8000:8000"
-      - "9090:9090"
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./backend:/app
-      - ./logs:/app/logs
-      - ./knowledge:/app/knowledge
-      - ./chroma_db:/app/chroma_db
+      - ./backend/logs:/app/logs
     depends_on:
       - mysql
       - redis
-    restart: unless-stopped
     networks:
-      - app_network
-    command: >
-      sh -c "
-        echo 'Waiting for MySQL...' &&
-        sleep 10 &&
-        python ../scripts/database/init_database.py &&
-        python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-      "
-
-  # 前端应用服务
+      - app-network
+      - monitoring
+    restart: always
+  
+  # 前端服务
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: customer_service_frontend
+    container_name: frontend
     ports:
-      - "80:80"
-    environment:
-      - VITE_API_BASE_URL=http://localhost:8000
-      - VITE_WS_URL=ws://localhost:8000
+      - "3000:80"
     depends_on:
       - backend
-    restart: unless-stopped
     networks:
-      - app_network
-
+      - app-network
+    restart: always
+  
+  # Loki服务 - 日志收集系统
+  loki:
+    image: grafana/loki:2.9.1
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/config:/etc/loki
+      - ./loki/data:/loki
+    command:
+      - -config.file=/etc/loki/loki-config.yaml
+    networks:
+      - monitoring
+  
+  # Promtail服务 - 日志采集代理
+  promtail:
+    image: grafana/promtail:2.9.1
+    container_name: promtail
+    volumes:
+      - ./promtail/config:/etc/promtail
+      - ./backend/logs:/logs:ro
+    command:
+      - -config.file=/etc/promtail/promtail-config.yaml
+    networks:
+      - monitoring
+  
+  # Grafana服务 - 可视化平台
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - monitoring
+    depends_on:
+      - loki
+      - promtail
+  
 volumes:
   mysql_data:
     driver: local
   redis_data:
     driver: local
-
+  
 networks:
-  app_network:
+  app-network:
+    driver: bridge
+  monitoring:
     driver: bridge

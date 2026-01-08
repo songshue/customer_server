@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from app.api.v1 import auth, chat, metrics, knowledge
+from app.api.v1 import auth, chat, metrics, knowledge, feedback
 from app.managers.redis_manager import redis_manager
 from app.managers.mysql_manager import mysql_manager
 from app.managers.prometheus_manager import prometheus_metrics
@@ -42,6 +42,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api", tags=["认证"])
 app.include_router(chat.router, prefix="/api/v1", tags=["聊天"])
+app.include_router(feedback.router, prefix="/api/v1", tags=["反馈"])
 app.include_router(metrics.router, prefix="/api/v1/metrics", tags=["指标"])
 app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["知识库"])
 

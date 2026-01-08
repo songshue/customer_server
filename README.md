@@ -87,18 +87,39 @@
 ### 方法1: Docker Compose部署 (推荐)
 
 ```bash
-# 启动所有服务 (MySQL, Redis, 前端, 后端)
+# 启动所有服务 (MySQL, Redis, 前端, 后端, 监控系统)
 docker-compose up -d
 
 # 查看服务状态
 docker-compose ps
+
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+
+# 重启服务
+docker-compose restart
 ```
 
 访问地址:
 - 前端界面: http://localhost:3000
 - 后端API: http://localhost:8000
 - API文档: http://localhost:8000/docs
-- Prometheus监控: http://localhost:9090
+- Grafana监控: http://localhost:3001 (默认账号密码: admin/admin)
+
+### Docker Compose服务说明
+
+| 服务名称 | 容器名称 | 端口映射 | 描述 |
+|----------|----------|----------|------|
+| mysql | mysql | 3306:3306 | MySQL关系数据库 |
+| redis | redis | 6379:6379 | Redis缓存服务 |
+| backend | backend | 8000:8000 | FastAPI后端服务 |
+| frontend | frontend | 3000:80 | Vue 3前端服务 |
+| loki | loki | 3100:3100 | Loki日志收集系统 |
+| promtail | promtail | - | 日志采集代理 |
+| grafana | grafana | 3001:3000 | Grafana可视化平台 |
 
 ### 方法2: 手动部署
 

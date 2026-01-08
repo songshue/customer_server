@@ -27,14 +27,15 @@ class LoggerTool:
         self.log_level = logging.INFO
         
     async def log_system_event(self, event_type: str, message: str, 
-                              details: Dict[str, Any] = None) -> None:
+                              details: Dict[str, Any] = None, trace_id: str = None) -> None:
         """记录系统事件"""
         try:
             log_entry = {
                 "timestamp": datetime.now().isoformat(),
                 "event_type": event_type,
                 "message": message,
-                "details": details or {}
+                "details": details or {},
+                "trace_id": trace_id
             }
             
             self.logger.info(f"系统事件 [{event_type}]: {message}")

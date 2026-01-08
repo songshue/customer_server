@@ -67,7 +67,8 @@ async def handle_stream_response(
     response_metadata: dict,
     ai_timestamp: datetime,
     logger_manager,
-    prometheus_metrics
+    prometheus_metrics,
+    trace_id: str
 ):
     """处理多Agent系统的流式响应 - 真正的并行流式输出"""
     stream_start_time = time.time()
@@ -88,7 +89,8 @@ async def handle_stream_response(
                     "user_id": user_id,
                     "user_input": user_input,
                     "stream_id": stream_id
-                }
+                },
+                trace_id=trace_id
             )
         
         # 发送流式响应开始消息
@@ -107,7 +109,7 @@ async def handle_stream_response(
         save_started = False
         
         # 获取多agent系统的流式响应 - 真正的流式输出
-        stream_iter = agent_coordinator.stream_response(user_input, session_id)
+        stream_iter = agent_coordinator.stream_response(user_input, session_id, trace_id)
         
         # 尝试获取第一个chunk来判断是否为完整答案（缓存命中）
         try:
@@ -262,7 +264,7 @@ async def handle_stream_response(
             'user_id': user_id,
             'stream_id': stream_id,
             'duration': stream_duration
-        })
+        }, trace_id=trace_id)
         
         # 记录流式响应失败指标
         prometheus_metrics.record_chat_event('stream_response_failed', session_id=session_id, user_id=user_id)
@@ -376,9 +378,10 @@ class ConnectionManager:
         except Exception as e:
             connection_duration = time.time() - start_time
             
-            # 记录连接失败
+            # 记录WebSocket连接失败
             await logger_manager.log_error('websocket_connect_error', str(e), 
-                                         {'user_id': user_id, 'session_id': session_id, 'duration': connection_duration})
+                                         {'user_id': user_id, 'session_id': session_id, 'duration': connection_duration}, 
+                                         trace_id=str(uuid.uuid4()))
             
             # 记录WebSocket连接失败指标
             prometheus_metrics.record_websocket_event('connection_failed')
@@ -435,20 +438,22 @@ class ConnectionManager:
                 final_duration = time.time() - start_time
                 
                 # 记录消息发送成功（仅开发环境）
-                if os.getenv('NODE_ENV') != 'production':
-                    await logger_manager.log_chat_event(
-                        event_type="MESSAGE_SENT",
-                        session_id=session_id,
-                        user_id=user_id,
-                        message_content=message[:100],  # 只记录前100个字符，避免日志过大
-                        duration=final_duration
-                    )
+            if os.getenv('NODE_ENV') != 'production':
+                await logger_manager.log_chat_event(
+                    event_type="MESSAGE_SENT",
+                    session_id=session_id,
+                    user_id=user_id,
+                    message_content=message[:100],  # 只记录前100个字符，避免日志过大
+                    duration=final_duration,
+                    trace_id=str(uuid.uuid4())
+                )
                 
                 logging.debug(f"发送消息成功: {session_id}，耗时: {final_duration:.3f}s")
             else:
                 # 记录消息发送失败 - 连接不存在
                 await logger_manager.log_error('websocket_send_message_error', 'Connection not found', 
-                                             {'session_id': session_id, 'user_id': user_id, 'duration': time.time() - start_time})
+                                             {'session_id': session_id, 'user_id': user_id, 'duration': time.time() - start_time}, 
+                                             trace_id=str(uuid.uuid4()))
                 
                 # 记录消息发送失败指标
                 prometheus_metrics.record_chat_event('message_send_failed', session_id=session_id, user_id=user_id)
@@ -460,7 +465,8 @@ class ConnectionManager:
             
             # 记录消息发送异常
             await logger_manager.log_error('websocket_send_message_error', str(e), 
-                                         {'session_id': session_id, 'user_id': user_id, 'duration': final_duration})
+                                         {'session_id': session_id, 'user_id': user_id, 'duration': final_duration}, 
+                                         trace_id=str(uuid.uuid4()))
             
             # 记录消息发送失败指标
             prometheus_metrics.record_chat_event('message_send_failed', session_id=session_id, user_id=user_id)
@@ -493,12 +499,14 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_toke
             raise HTTPException(status_code=400, detail="消息内容不能为空")
         
         # 记录HTTP聊天请求开始
+        trace_id = str(uuid.uuid4())
         await logger_manager.log_chat_event(
             event_type="HTTP_CHAT_REQUEST",
             session_id=None,
             user_id=user_id,
             message_content=user_message[:100],
-            duration=0
+            duration=0,
+            trace_id=trace_id
         )
         
         prometheus_metrics.record_chat_event('http_chat_request', user_id=user_id)
@@ -509,7 +517,7 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_toke
         
         # 使用多Agent系统生成回复
         agent_coordinator = get_multi_agent_coordinator()
-        ai_response = await agent_coordinator.process_message(user_message, session_id)
+        ai_response = await agent_coordinator.process_message(user_message, session_id, trace_id)
         ai_response = ai_response.content if hasattr(ai_response, 'content') else str(ai_response)
         has_knowledge = True  # 假设agent_coordinator总是能处理
         references = []  # agent_coordinator可能不提供references
@@ -523,12 +531,14 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_toke
             session_id=session_id,
             user_id=user_id,
             message_content=ai_response[:100],
-            duration=duration
+            duration=duration,
+            trace_id=trace_id
         )
         
         # 记录性能日志
         await logger_manager.log_performance('http_chat', duration, 
-                                           {'user_id': user_id, 'message_length': len(user_message), 'response_length': len(ai_response)})
+                                           {'user_id': user_id, 'message_length': len(user_message), 'response_length': len(ai_response)}, 
+                                           trace_id=trace_id)
         
         # 记录聊天响应指标
         prometheus_metrics.record_chat_event('http_chat_response', user_id=user_id)
@@ -549,11 +559,12 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_toke
             session_id=None,
             user_id=user_id,
             message_content=request.message[:100] if request.message else '',
-            duration=duration
+            duration=duration,
+            trace_id=trace_id
         )
         
         prometheus_metrics.record_chat_event('http_chat_failed', user_id=user_id)
-        await logger_manager.log_performance('http_chat', duration, {'user_id': user_id, 'status': 'failed'})
+        await logger_manager.log_performance('http_chat', duration, {'user_id': user_id, 'status': 'failed'}, trace_id=trace_id)
         
         raise
     except Exception as e:
@@ -561,10 +572,11 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(verify_toke
         
         # 记录HTTP聊天异常
         await logger_manager.log_error('http_chat_error', str(e), 
-                                     {'user_id': user_id, 'duration': duration})
+                                     {'user_id': user_id, 'duration': duration}, 
+                                     trace_id=trace_id)
         
         prometheus_metrics.record_chat_event('http_chat_error', user_id=user_id)
-        await logger_manager.log_performance('http_chat', duration, {'user_id': user_id, 'status': 'error'})
+        await logger_manager.log_performance('http_chat', duration, {'user_id': user_id, 'status': 'error'}, trace_id=trace_id)
         
         logging.error(f"处理聊天请求时发生错误: {e}")
         raise HTTPException(status_code=500, detail="服务器内部错误")
@@ -735,11 +747,10 @@ async def websocket_endpoint(websocket: WebSocket):
                             if redis_success:
                                 logging.info(f"用户消息已缓存到Redis: {session_id}")
                                 
-                               # 记录Redis缓存成功（仅开发环境）
-                            if os.getenv('NODE_ENV') != 'production':
-                                await logger_manager.log_performance('redis_cache_user_message', redis_cache_duration, 
-                                                                   {'session_id': session_id, 'user_id': user_id, 'message_length': len(user_message)})
-                                
+                                # 记录Redis缓存成功（仅开发环境）
+                                if os.getenv('NODE_ENV') != 'production':
+                                    await logger_manager.log_performance('redis_cache_user_message', redis_cache_duration, 
+                                                                       {'session_id': session_id, 'user_id': user_id, 'message_length': len(user_message)})
                             else:
                                 logging.warning(f"Redis缓存失败，但继续处理消息: {session_id}")
                                 
@@ -861,6 +872,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 context_messages.append(f"user: {user_message}")
                                 
                                 # 使用流式输出模式
+                                trace_id = str(uuid.uuid4())
                                 await handle_stream_response(
                                     manager=manager,
                                     session_id=session_id,
@@ -870,7 +882,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                     response_metadata={"intent": "multi_agent"},
                                     ai_timestamp=current_timestamp,
                                     logger_manager=logger_manager,
-                                    prometheus_metrics=prometheus_metrics
+                                    prometheus_metrics=prometheus_metrics,
+                                    trace_id=trace_id
                                 )
                                 
                                 # 流式输出处理完成后，继续处理下一个消息

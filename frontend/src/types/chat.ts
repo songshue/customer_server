@@ -12,6 +12,7 @@ export interface ChatMessage {
   references?: Reference[]
   isStreaming?: boolean
   streamId?: string
+  feedbackSubmitted?: boolean
 }
 
 export interface ChatRequest {

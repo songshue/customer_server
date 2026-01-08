@@ -73,7 +73,7 @@ class AgentCoordinator:
             "product_agent": {"calls": 0, "success_rate": 0.0, "avg_processing_time": 0.0}
         }
     
-    async def process_message(self, user_input: str, session_id: str = None) -> AgentResponse:
+    async def process_message(self, user_input: str, session_id: str = None, trace_id: str = None) -> AgentResponse:
         """处理用户消息的主入口"""
         start_time = time.time()
         
@@ -85,7 +85,8 @@ class AgentCoordinator:
                 details={
                     "session_id": session_id,
                     "user_input": user_input
-                }
+                },
+                trace_id=trace_id
             )
             
             # 0. 优先检查缓存命中（如果Redis管理器可用）
@@ -298,7 +299,7 @@ class AgentCoordinator:
         """获取Agent统计信息"""
         return self.agent_stats.copy()
     
-    async def stream_response(self, user_input: str, session_id: str = None) -> AsyncGenerator[str, None]:
+    async def stream_response(self, user_input: str, session_id: str = None, trace_id: str = None) -> AsyncGenerator[str, None]:
         """流式响应生成器 - 真正的端到端流式输出"""
         try:
             # 记录流式响应开始
@@ -308,7 +309,8 @@ class AgentCoordinator:
                 details={
                     "session_id": session_id,
                     "user_input": user_input[:100]
-                }
+                },
+                trace_id=trace_id
             )
             
             # 0. 优先检查缓存命中 - 如果命中缓存，直接返回完整答案（不流式输出）

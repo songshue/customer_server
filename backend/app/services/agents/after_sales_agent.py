@@ -283,8 +283,9 @@ class AfterSalesAgent:
                 logger.info(f"从缓存获取售后政策: {cache_key}")
                 return cached_policy
             
-            # 如果没有RAG管道，返回默认政策
-            if not self.rag_pipeline:
+            # 如果没有RAG管道或RAG管道不可用，返回默认政策
+            print("rag_pipeline:", self.rag_pipeline)
+            if not self.rag_pipeline or not self.rag_pipeline.is_available().get('initialized', False):
                 default_policy = {
                     "policies": [
                         "7天无理由退货",

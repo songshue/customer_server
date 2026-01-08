@@ -543,12 +543,12 @@ class QdrantVectorStore:
                 ]
             )
         
-        hits = self.client.query_points(
+        hits = self.client.search(
             collection_name=self.collection_name,
-            query=query_vector,
+            query_vector=query_vector,
             limit=limit,
             query_filter=filter_condition
-        ).points
+        )
         
         return [
             {

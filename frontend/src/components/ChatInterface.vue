@@ -161,6 +161,37 @@
               <div class="message-time">{{ formatTime(message.timestamp) }}</div>
             </div>
           </div>
+          <!-- 反馈按钮 - 仅显示在AI消息下方 -->
+          <div v-if="message.type === 'ai'" class="feedback-section">
+            <div class="feedback-buttons">
+              <button 
+                class="feedback-btn like-btn" 
+                @click="handleFeedback(message.id, 5, 'like')"
+                :disabled="message.feedbackSubmitted"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                </svg>
+                <span>满意</span>
+              </button>
+              <button 
+                class="feedback-btn dislike-btn" 
+                @click="handleFeedback(message.id, 1, 'dislike')"
+                :disabled="message.feedbackSubmitted"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0L12 2.69z"/>
+                </svg>
+                <span>不满意</span>
+              </button>
+            </div>
+            <div v-if="message.feedbackSubmitted" class="feedback-thankyou">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+              </svg>
+              <span>感谢您的反馈</span>
+            </div>
+          </div>
         </div>
 
 
@@ -563,6 +594,49 @@ const formatSessionTime = (timeString: string) => {
       hour: '2-digit',
       minute: '2-digit'
     })
+  }
+}
+
+// 处理用户反馈
+const handleFeedback = async (messageId: string, rating: number, type: string) => {
+  try {
+    // 获取认证token
+    const token = authStore.getToken()
+    if (!token) {
+      message.error('请先登录')
+      return
+    }
+    
+    // 调用反馈API
+    const response = await fetch('/api/v1/feedback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        message_id: parseInt(messageId),
+        session_id: sessionsStore.currentSessionId || '',
+        rating: rating,
+        comment: type
+      })
+    })
+    
+    if (response.ok) {
+      // 更新消息状态，标记为已提交反馈
+      const messageIndex = chatStore.messages.findIndex(msg => msg.id === messageId)
+      if (messageIndex !== -1) {
+        chatStore.messages[messageIndex].feedbackSubmitted = true
+      }
+      
+      message.success('感谢您的反馈')
+    } else {
+      const errorData = await response.json()
+      message.error(`提交反馈失败: ${errorData.detail || '未知错误'}`)
+    }
+  } catch (error) {
+    console.error('提交反馈失败:', error)
+    message.error('提交反馈失败，请稍后重试')
   }
 }
 
@@ -1053,6 +1127,66 @@ onUnmounted(() => {
 
 .message-user .message-time {
   text-align: right;
+}
+
+/* 反馈按钮样式 */
+.feedback-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 4px;
+  margin-right: 56px;
+  gap: 8px;
+}
+
+.feedback-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.feedback-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  color: white;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.feedback-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.feedback-btn.like-btn:hover:not(:disabled) {
+  background: rgba(76, 175, 80, 0.2);
+  border-color: rgba(76, 175, 80, 0.3);
+}
+
+.feedback-btn.dislike-btn:hover:not(:disabled) {
+  background: rgba(244, 67, 54, 0.2);
+  border-color: rgba(244, 67, 54, 0.3);
+}
+
+.feedback-thankyou {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .typing-animation {

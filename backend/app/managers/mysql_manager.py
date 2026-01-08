@@ -605,6 +605,108 @@ class MySQLManager:
         except Exception as e:
             logger.error(f"获取会话用户ID失败: {e}")
             return None
+    
+    async def save_feedback(self, message_id: int, session_id: str, user_id: str, rating: int, comment: str = None) -> bool:
+        """
+        保存用户反馈
+        
+        Args:
+            message_id: 消息ID
+            session_id: 会话ID
+            user_id: 用户ID
+            rating: 评分 (1-5)
+            comment: 评论内容
+            
+        Returns:
+            是否保存成功
+        """
+        if not self.connection_pool:
+            logger.warning("MySQL未连接，跳过反馈保存")
+            return False
+        
+        try:
+            async with self.connection_pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    # 检查用户反馈表是否存在，如果不存在则创建
+                    create_feedback_table_sql = """
+                    CREATE TABLE IF NOT EXISTS feedback (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        message_id BIGINT NOT NULL,
+                        session_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        rating INT NOT NULL,
+                        comment TEXT,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_message_id (message_id),
+                        INDEX idx_session_id (session_id),
+                        INDEX idx_user_id (user_id),
+                        INDEX idx_rating (rating),
+                        INDEX idx_created_at (created_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """
+                    await cursor.execute(create_feedback_table_sql)
+                    
+                    # 修改已存在表的message_id字段类型为BIGINT
+                    alter_table_sql = """
+                    ALTER TABLE feedback MODIFY COLUMN message_id BIGINT NOT NULL
+                    """
+                    try:
+                        await cursor.execute(alter_table_sql)
+                    except Exception as e:
+                        # 如果表不存在或字段类型已经是BIGINT，忽略错误
+                        logger.debug(f"修改feedback表结构失败（可能已存在或字段类型已正确）: {e}")
+                    
+                    # 插入反馈数据
+                    insert_sql = """
+                    INSERT INTO feedback (message_id, session_id, user_id, rating, comment)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """
+                    
+                    await cursor.execute(insert_sql, (
+                        message_id, session_id, user_id, rating, comment
+                    ))
+                    
+                    logger.info(f"保存反馈成功: 消息ID {message_id}, 评分 {rating}")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"保存反馈失败: {e}")
+            return False
+    
+    async def get_low_rating_feedbacks(self, days: int = 7) -> List[Dict]:
+        """
+        获取低评分反馈
+        
+        Args:
+            days: 天数范围
+            
+        Returns:
+            低评分反馈列表
+        """
+        if not self.connection_pool:
+            return []
+        
+        try:
+            async with self.connection_pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    select_sql = """
+                    SELECT f.*, c.content as message_content
+                    FROM feedback f
+                    JOIN chat_messages c ON f.message_id = c.id
+                    WHERE f.rating < 3
+                    AND f.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                    ORDER BY f.created_at DESC
+                    """
+                    
+                    await cursor.execute(select_sql, (days,))
+                    results = await cursor.fetchall()
+                    
+                    logger.info(f"获取低评分反馈: {len(results)} 条")
+                    return results
+                    
+        except Exception as e:
+            logger.error(f"获取低评分反馈失败: {e}")
+            return []
 
 # 全局MySQL管理器实例
 mysql_manager = MySQLManager()
